@@ -1,0 +1,69 @@
+#!/bin/sh
+# Conventional Commit validator for Alpine/BusyBox
+# Blocks commits whose first non-comment line doesn't start with an allowed type.
+
+MSG_FILE="$1"
+
+# ---- Configuration ----------------------------------------------------------
+# Edit this list to your preferred types (keep lowercase)
+TYPES="feat fix docs style refactor perf test chore ci build revert other"
+
+# Optionally allow a project-level override:
+# Put space-separated types into .commit-types at repo root (e.g., "feat fix chore")
+if [ -f ".commit-types" ]; then
+  FILE_TYPES="$(tr '\n' ' ' < .commit-types | sed 's/[[:space:]]\+/ /g' | sed 's/^ *//; s/ *$//')"
+  [ -n "$FILE_TYPES" ] && TYPES="$FILE_TYPES"
+fi
+# -----------------------------------------------------------------------------
+
+# Build a regex alternation from TYPES (e.g., 'feat|fix|chore')
+ALT="$(printf "%s\n" "$TYPES" | tr ' ' '\n' | sed '/^$/d' | paste -sd'|' -)"
+
+# Extract the first *meaningful* line (non-empty, not starting with '#')
+FIRST_LINE=""
+# shellcheck disable=SC2162
+while IFS= read line; do
+  case "$line" in
+    ''|'#'*) continue;;
+    *) FIRST_LINE="$line"; break;;
+  esac
+done < "$MSG_FILE"
+
+# If no content, block
+if [ -z "$FIRST_LINE" ]; then
+  printf "%s\n" "✖ Commit message is empty (after comments). Aborting." >&2
+  exit 1
+fi
+
+# Allow standard Git-generated merge messages to pass
+case "$FIRST_LINE" in
+  "Merge "*|"Revert ""*" ) exit 0 ;;
+esac
+
+# Accept autosquash prefixes 'fixup!' / 'squash!' before the type
+# Valid forms (examples):
+#   feat: add x
+#   fix(scope): handle null
+#   chore!: breaking change
+#   squash! feat: rewrite
+#   fixup! chore(scope)!: tidy
+# Pattern: ^(fixup! |squash! )?TYPE(\(scope\))?(!)?: SP
+PATTERN="^(fixup![[:space:]]+|squash![[:space:]]+)?(${ALT})(\([^)]+\))?(!)?:[[:space:]]"
+
+# BusyBox grep supports -E; use it to test the pattern
+# shellcheck disable=SC2086
+if printf "%s" "$FIRST_LINE" | grep -Eq "$PATTERN"; then
+  exit 0
+fi
+
+# If we get here, the message is invalid
+printf "%s\n\n" "✖ Invalid commit message format." >&2
+printf "First line was:\n  %s\n\n" "$FIRST_LINE" >&2
+printf "Expected one of the types: %s\n" "$TYPES" >&2
+printf "Valid examples:\n" >&2
+printf "  feat: add user login\n" >&2
+printf "  fix(auth): handle expired tokens\n" >&2
+printf "  chore!: drop deprecated API\n" >&2
+printf "  squash! refactor(core): split modules\n\n" >&2
+printf "Tip: use 'git commit --no-verify' to bypass *locally* (not recommended).\n" >&2
+exit 1

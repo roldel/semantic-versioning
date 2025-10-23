@@ -1,0 +1,1 @@
+sudo docker run -it --rm -v $(pwd):/app -w /app alpine:latest sh
